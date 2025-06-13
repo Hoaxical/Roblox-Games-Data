@@ -1,6 +1,11 @@
 import requests
 import json
 import re
+import os
+
+# Ensure subfolder exists for thumbnails
+SAVE_FOLDER = "game_thumbnails"
+os.makedirs(SAVE_FOLDER, exist_ok=True)
 
 # Function to remove emojis from the game name
 def clean_game_name(name):
@@ -20,6 +25,16 @@ def clean_game_name(name):
     )
     return emoji_pattern.sub("", name)
 
+# Function to round visits to the nearest thousand, million, or billion
+def round_visits(visits):
+    if visits >= 1_000_000_000:  # Billions
+        return round(visits / 1_000_000_000) * 1_000_000_000
+    elif visits >= 1_000_000:  # Millions
+        return round(visits / 1_000_000) * 1_000_000
+    elif visits >= 1_000:  # Thousands
+        return round(visits / 1_000) * 1_000
+    return visits  # If less than 1,000, keep as is
+
 # Function to fetch game data from Roblox API
 def get_game_data(universe_id):
     game_url = f"https://games.roblox.com/v1/games?universeIds={universe_id}"
@@ -34,24 +49,80 @@ def get_game_data(universe_id):
         thumbnail_data = thumbnail_response.json()["data"][0]  # Extract thumbnail
 
         cleaned_name = clean_game_name(game_data["name"])  # Remove emojis
+        rounded_visits = round_visits(game_data["visits"])  # Round visits
 
         return {
             "name": cleaned_name,
-            "visits": game_data["visits"],
+            "universeId": universe_id,
+            "visits": rounded_visits,
             "thumbnail": thumbnail_data["imageUrl"]
         }
     else:
-        print("❌ Error fetching data. Check if the Universe ID is valid.")
+        print(f"❌ Error fetching data for Universe ID: {universe_id}. Check if it is valid.")
         return None
 
-# Prompt user for a Universe ID
-universe_id = input("Enter the Roblox game's Universe ID: ")
+# Function to download and save thumbnail in the "game_thumbnails" folder
+def download_thumbnail(thumbnail_url, game_name):
+    sanitized_name = "".join(c for c in game_name if c.isalnum() or c in (" ", "_")).strip()  # Clean filename
+    save_path = os.path.join(SAVE_FOLDER, f"{sanitized_name}_thumbnail.png")
 
-# Get the game data
-game_info = get_game_data(universe_id)
+    response = requests.get(thumbnail_url, stream=True)
+    if response.status_code == 200:
+        with open(save_path, "wb") as file:
+            for chunk in response.iter_content(1024):
+                file.write(chunk)
+        print(f"✅ Thumbnail saved at: {save_path}")
+    else:
+        print("❌ Failed to download thumbnail.")
 
-# Save data to a JSON file
-if game_info:
-    with open("game_data.json", "w") as json_file:
-        json.dump(game_info, json_file, indent=4)
-    print("✅ Game data saved to 'game_data.json'")
+# Function to load existing JSON file or create a new one
+def load_game_data():
+    json_file = "game_data.json"
+    if os.path.exists(json_file):
+        with open(json_file, "r") as file:
+            return json.load(file)
+    return []  # Return empty list if no data exists
+
+# Function to save game data immediately
+def save_game_data(game_list):
+    json_file = "game_data.json"
+    with open(json_file, "w") as file:
+        json.dump(game_list, file, indent=4)
+    print(f"✅ Game data saved to '{json_file}'.")
+
+# Function to read Universe IDs from `universe_ids.txt`
+def load_universe_ids():
+    txt_file = "universe_ids.txt"
+    
+    universe_ids = []
+
+    if os.path.exists(txt_file):
+        with open(txt_file, "r") as file:
+            universe_ids = [line.strip() for line in file if line.strip().isdigit()]
+            print("Loaded Universe IDs:", universe_ids)
+    
+    return universe_ids
+
+# Main function to process all universe IDs from the text file
+def process_universe_ids():
+    universe_ids = load_universe_ids()  # Load Universe IDs from file
+    game_data_list = load_game_data()  # Load existing games
+
+    for universe_id in universe_ids:
+        print(f"🔍 Processing Universe ID: {universe_id}")
+        game_info = get_game_data(universe_id)
+
+        if game_info:
+            game_data_list.append(game_info)  # Append new game data
+            print(f"🎮 Added: {game_info['name']} - Visits: {game_info['visits']}")
+
+            # Download thumbnail for the game
+            download_thumbnail(game_info["thumbnail"], game_info["name"])
+
+            # Save JSON immediately after each game entry
+            save_game_data(game_data_list)
+
+    print("👋 All games processed successfully!")
+
+# Run the script
+process_universe_ids()
